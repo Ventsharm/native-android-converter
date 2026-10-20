@@ -61,7 +61,10 @@ public code and the names of your repository secrets.
    in your selected private repository. A temporary draft release holds its
    request manifest. The ZIP is not added to a branch or commit history. GitHub
    may retain the private unreferenced object under its internal storage policies.
-2. A preparation job verifies the upload belongs to the current random request ID,
+2. A dedicated upload job reads the private draft manifest (GitHub requires write
+   permission for draft releases) and checks the ZIP checksum. It runs no app code
+   and has no signing secrets. A separate preparation job has only read permission,
+   verifies the upload belongs to the current random request ID,
    checks ZIP paths, rejects links/secret files/oversized inputs, and builds source
    projects **without the signing secrets**.
 3. A separate clean signing job downloads only the prepared AAB. It uses official

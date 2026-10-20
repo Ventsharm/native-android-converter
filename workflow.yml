@@ -26,13 +26,15 @@ concurrency:
   group: native-android-${{ inputs.build_id }}
   cancel-in-progress: false
 jobs:
-  prepare:
-    name: Prepare app bundle without signing secrets
+  upload:
+    name: Read private upload without running app code
     if: github.event.repository.private == true && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
+    outputs:
+      source_artifact_id: ${{ steps.source.outputs.artifact-id }}
     steps:
       - name: Validate private upload and download ZIP
         env:
@@ -72,6 +74,26 @@ jobs:
           (temp/'source.zip').write_bytes(data)
           (temp/'source-blob.json').unlink()
           PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: source
+        with:
+          name: native-source-${{ inputs.build_id }}
+          path: ${{ runner.temp }}/source.zip
+          if-no-files-found: error
+          retention-days: 1
+  prepare:
+    needs: upload
+    name: Prepare app bundle without signing secrets
+    if: github.event.repository.private == true && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-source-${{ inputs.build_id }}
+          path: ${{ runner.temp }}
       - name: Inspect and safely unpack app ZIP
         id: input
         shell: bash
@@ -251,7 +273,7 @@ jobs:
           if-no-files-found: error
   cleanup:
     name: Remove temporary private uploads
-    needs: [prepare, sign]
+    needs: [upload, prepare, sign]
     if: always() && github.event.repository.private == true && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -264,6 +286,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD_ID: ${{ inputs.build_id }}
           RELEASE_ID: ${{ inputs.release_id }}
+          SOURCE_ID: ${{ needs.upload.outputs.source_artifact_id }}
           UNSIGNED_ID: ${{ needs.prepare.outputs.unsigned_artifact_id }}
         shell: bash
         run: |
@@ -277,6 +300,8 @@ jobs:
           assert release.get('draft') is True and release['tag_name']=='native-convert-input-'+os.environ['BUILD_ID'], 'Refusing to remove a different release.'
           PY
           gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
-          if [[ "$UNSIGNED_ID" =~ ^[0-9]+$ ]]; then
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$UNSIGNED_ID"
-          fi
+          for ARTIFACT_ID in "$SOURCE_ID" "$UNSIGNED_ID"; do
+            if [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
+            fi
+          done
