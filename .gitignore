@@ -10,3 +10,4 @@ __pycache__/
 key.properties
 keystore.properties
 site-source.tar.gz
+/dist/

@@ -1,6 +1,6 @@
 # Native Android Converter
 
-A private browser page for converting an Android ZIP into a signed AAB and a
+A browser page for converting an Android ZIP into a signed AAB and a
 universal APK, using the same private signing setup as Bubblewrap Builder.
 
 ## What to upload
@@ -43,10 +43,11 @@ An existing unrelated workflow at the same new path is never overwritten.
 
 ## Privacy and hosting
 
-This source repository is private. **A private GitHub repository does not by
-itself make an ordinary GitHub Pages website private.** The working page is
-published with owner-only sign-in protection through Sites. Keep this audience
-private when updating it. Do not turn on public GitHub Pages as a substitute.
+This source repository is private. The converter page itself is **public**, as
+requested, like Bubblewrap Builder. No page sign-in is required. Its frontend
+contains no secrets. GitHub builds, source uploads and signing secrets remain in
+the private build repository selected by the user. A public page does not grant
+other visitors access to your GitHub account or secrets.
 
 The frontend contains no analytics or third-party JavaScript. It holds the GitHub
 token in this tab only, never in localStorage, sessionStorage, cookies, URLs or
@@ -85,7 +86,7 @@ billing or buy build minutes. Only upload your own apps or source you trust.
 ## Updating
 
 Edit `index.html`, `builder.js` or `workflow.yml` here, run checks, then publish the
-matching private Site version. The next conversion updates this converter's
+matching public Site version. The next conversion updates this converter's
 workflow in the chosen private build repo. Existing signing secrets are never
 changed. Keep the original Bubblewrap Builder separate.
 
