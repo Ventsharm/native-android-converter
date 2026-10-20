@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+*.pyc
+*.jks
+*.keystore
+*.p12
+*.pfx
+.env
+.clasprc.json
+key.properties
+keystore.properties
+site-source.tar.gz

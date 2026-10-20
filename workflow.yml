@@ -1,0 +1,267 @@
+# Ventsharm Native Android Converter v1
+name: Native Android Converter
+run-name: "Native Android Converter — ${{ inputs.build_id }}"
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: Unique converter request ID
+        required: true
+        type: string
+      release_id:
+        description: Temporary private source release
+        required: true
+        type: string
+      asset_id:
+        description: Temporary private ZIP asset
+        required: true
+        type: string
+      app_module:
+        description: Android app module, for source ZIPs only
+        default: app
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: native-android-${{ inputs.build_id }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    name: Prepare app bundle without signing secrets
+    if: github.event.repository.private == true && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Validate private upload and download ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ inputs.build_id }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          ASSET_ID: ${{ inputs.asset_id }}
+          APP_MODULE: ${{ inputs.app_module }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_ID" =~ ^[a-f0-9]{32}$ ]] && [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] && [[ "$ASSET_ID" =~ ^[0-9]+$ ]]
+          [[ "$APP_MODULE" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/release.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          r=json.loads((Path(os.environ['RUNNER_TEMP'])/'release.json').read_text())
+          assert r.get('draft') is True, 'Only temporary private draft uploads are accepted.'
+          assert r['tag_name']=='native-convert-input-'+os.environ['BUILD_ID'], 'Upload does not belong to this request.'
+          a=next((a for a in r.get('assets',[]) if str(a['id'])==os.environ['ASSET_ID']),None)
+          assert a and a['name']=='source.zip' and 22<=a['size']<=30*1024*1024, 'Invalid source ZIP.'
+          PY
+          gh api -H 'Accept: application/octet-stream' "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" > "$RUNNER_TEMP/source.zip"
+      - name: Inspect and safely unpack app ZIP
+        id: input
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, stat, zipfile, shutil
+          from pathlib import Path, PurePosixPath
+          archive=Path(os.environ['RUNNER_TEMP'])/'source.zip'
+          root=Path(os.environ['GITHUB_WORKSPACE'])/'source'
+          root.mkdir()
+          with zipfile.ZipFile(archive) as z:
+            entries=z.infolist()
+            assert len(entries)<=20000 and sum(e.file_size for e in entries)<=512*1024*1024, 'ZIP expands beyond the supported limit.'
+            has_source=any(PurePosixPath(e.filename.replace('\\','/')).name in {'settings.gradle','settings.gradle.kts'} and not any(part in {'.git','.gradle','build','.idea','__MACOSX'} for part in PurePosixPath(e.filename.replace('\\','/')).parts) for e in entries)
+            seen=set()
+            for e in entries:
+              name=e.filename.replace('\\','/')
+              p=PurePosixPath(name)
+              if not p.parts: continue
+              assert not p.is_absolute() and '..' not in p.parts and ':' not in p.parts[0], 'Unsafe archive path.'
+              assert not any(ord(c)<32 or ord(c)==127 for c in name), 'Control characters in archive path.'
+              assert not stat.S_ISLNK(e.external_attr>>16) and not (e.flag_bits&1), 'Links and encrypted ZIPs are not supported.'
+              assert e.file_size<=256*1024*1024, 'Archive entry too large.'
+              assert p.name.lower() not in {'key.properties','keystore.properties','.clasprc.json','.env'} and p.suffix.lower() not in {'.jks','.keystore','.p12','.pfx'}, 'Remove private signing keys and secret configuration from the ZIP.'
+              if any(part in {'.git','.gradle','.idea','__MACOSX'} for part in p.parts): continue
+              if has_source and 'build' in p.parts: continue
+              if not has_source and not e.is_dir() and p.suffix.lower()!='.aab': continue
+              assert str(p) not in seen, 'Duplicate archive path.'
+              seen.add(str(p))
+              target=root.joinpath(*p.parts)
+              if e.is_dir(): target.mkdir(parents=True,exist_ok=True); continue
+              target.parent.mkdir(parents=True,exist_ok=True)
+              with z.open(e) as src,target.open('wb') as dst: shutil.copyfileobj(src,dst)
+          candidates=sorted({p.parent for p in root.rglob('settings.gradle')}|{p.parent for p in root.rglob('settings.gradle.kts')})
+          out=Path(os.environ['GITHUB_WORKSPACE'])/'unsigned'
+          out.mkdir()
+          if candidates:
+            assert len(candidates)==1, 'Include just one Android project in the ZIP.'
+            project=candidates[0]
+            assert (project/'gradlew').is_file() and (project/'gradle/wrapper/gradle-wrapper.jar').is_file() and (project/'gradle/wrapper/gradle-wrapper.properties').is_file(), 'Include the complete Gradle wrapper.'
+            kind='project'
+          else:
+            bundles=[p for p in root.rglob('*') if p.is_file() and p.suffix.lower()=='.aab']
+            assert len(bundles)==1, 'Include one AAB, or one complete native Android project. An APK-only or website ZIP cannot create an AAB.'
+            shutil.copyfile(bundles[0],out/'app.aab')
+            kind='bundle'; project=root
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+            f.write('kind='+kind+'\nproject_root='+str(project.relative_to(Path(os.environ['GITHUB_WORKSPACE'])))+'\n')
+          PY
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        if: steps.input.outputs.kind == 'project'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        if: steps.input.outputs.kind == 'project'
+      - uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
+        if: steps.input.outputs.kind == 'project'
+      - name: Build release app bundle from source
+        if: steps.input.outputs.kind == 'project'
+        working-directory: ${{ steps.input.outputs.project_root }}
+        env:
+          APP_MODULE: ${{ inputs.app_module }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./gradlew --no-daemon ":$APP_MODULE:bundleRelease"
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          files=list((Path(os.environ['APP_MODULE'])/'build/outputs/bundle/release').glob('*.aab'))
+          assert len(files)==1, 'Expected one release AAB. Check the app module and release variant.'
+          shutil.copyfile(files[0],Path(os.environ['GITHUB_WORKSPACE'])/'unsigned/app.aab')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: unsigned
+        with:
+          name: native-unsigned-${{ inputs.build_id }}
+          path: unsigned/app.aab
+          if-no-files-found: error
+          retention-days: 1
+    outputs:
+      unsigned_artifact_id: ${{ steps.unsigned.outputs.artifact-id }}
+  sign:
+    name: Sign AAB and create APK using your existing key
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-unsigned-${{ inputs.build_id }}
+          path: unsigned
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+      - name: Download verified official bundletool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
+          echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $RUNNER_TEMP/bundletool.jar" | sha256sum --check
+          sdkmanager 'build-tools;36.0.0'
+      - name: Validate bundle and remove previous signing metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import PurePosixPath
+          with zipfile.ZipFile('unsigned/app.aab') as src,zipfile.ZipFile('unsigned/clean.aab','w') as dst:
+            assert len(src.infolist())<=50000 and sum(e.file_size for e in src.infolist())<=1024*1024*1024, 'Bundle expands beyond the supported limit.'
+            seen=set()
+            for entry in src.infolist():
+              assert entry.file_size<=256*1024*1024, 'Bundle entry too large.'
+              p=PurePosixPath(entry.filename)
+              assert not p.is_absolute() and '..' not in p.parts and entry.filename not in seen, 'Unsafe bundle structure.'
+              seen.add(entry.filename)
+              if len(p.parts)==2 and p.parts[0].upper()=='META-INF' and (p.name.upper()=='MANIFEST.MF' or p.suffix.upper() in {'.SF','.RSA','.DSA','.EC'} or p.name.upper().startswith('SIG-')): continue
+              dst.writestr(entry,src.read(entry))
+          PY
+          java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle=unsigned/clean.aab
+      - name: Sign and verify APK and AAB
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          trap 'python3 -c "import os; from pathlib import Path; [(Path(os.environ[\"RUNNER_TEMP\"])/n).unlink(missing_ok=True) for n in [\"native-signing.jks\",\"native-store-password.txt\",\"native-key-password.txt\"]]"' EXIT
+          python3 - <<'PY'
+          import os,base64
+          from pathlib import Path
+          for name in ['KEYSTORE_BASE64','KEYSTORE_PASSWORD','KEY_ALIAS','KEY_PASSWORD']:
+            assert os.environ.get(name), 'Missing '+name+' in the selected private repository.'
+          root=Path(os.environ['RUNNER_TEMP'])
+          (root/'native-signing.jks').write_bytes(base64.b64decode(''.join(os.environ['KEYSTORE_BASE64'].split()),validate=True))
+          (root/'native-store-password.txt').write_text(os.environ['KEYSTORE_PASSWORD'])
+          (root/'native-key-password.txt').write_text(os.environ['KEY_PASSWORD'])
+          PY
+          mkdir -p signed
+          jarsigner -keystore "$RUNNER_TEMP/native-signing.jks" -storepass:env KEYSTORE_PASSWORD -keypass:env KEY_PASSWORD -digestalg SHA-256 -signedjar signed/app-release.aab unsigned/clean.aab "$KEY_ALIAS"
+          jarsigner -verify signed/app-release.aab
+          java -jar "$RUNNER_TEMP/bundletool.jar" build-apks --bundle=unsigned/clean.aab --output="$RUNNER_TEMP/app.apks" --mode=universal --ks="$RUNNER_TEMP/native-signing.jks" --ks-key-alias="$KEY_ALIAS" --ks-pass="file:$RUNNER_TEMP/native-store-password.txt" --key-pass="file:$RUNNER_TEMP/native-key-password.txt"
+          python3 - <<'PY'
+          import os,zipfile
+          from pathlib import Path
+          with zipfile.ZipFile(Path(os.environ['RUNNER_TEMP'])/'app.apks') as z:
+            Path('signed/app-release.apk').write_bytes(z.read('universal.apk'))
+          PY
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs signed/app-release.apk > "$RUNNER_TEMP/apk-signers.txt"
+          keytool -exportcert -keystore "$RUNNER_TEMP/native-signing.jks" -storepass:env KEYSTORE_PASSWORD -alias "$KEY_ALIAS" -file "$RUNNER_TEMP/signer.der"
+          keytool -printcert -jarfile signed/app-release.aab -rfc > "$RUNNER_TEMP/aab-signers.pem"
+          python3 - <<'PY'
+          import os,hashlib,re,base64
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])
+          expected=hashlib.sha256((root/'signer.der').read_bytes()).hexdigest()
+          apk=re.search(r'Signer #1 certificate SHA-256 digest: ([a-fA-F0-9]+)',(root/'apk-signers.txt').read_text())
+          assert apk and apk.group(1).lower()==expected, 'APK signing certificate differs from your keystore.'
+          cert=re.search(r'-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----',(root/'aab-signers.pem').read_text(),re.S)
+          assert cert and hashlib.sha256(base64.b64decode(cert.group(1))).hexdigest()==expected, 'AAB signing certificate differs from your keystore.'
+          Path('signed/signing-certificate.txt').write_text('Both files use your repository signing key.\nCertificate SHA-256: '+':'.join(expected[i:i+2].upper() for i in range(0,len(expected),2))+'\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signed-android-${{ inputs.build_id }}
+          path: signed/
+          retention-days: 1
+          if-no-files-found: error
+  cleanup:
+    name: Remove temporary private uploads
+    needs: [prepare, sign]
+    if: always() && github.event.repository.private == true && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Remove this request's draft release and unsigned artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ inputs.build_id }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          UNSIGNED_ID: ${{ needs.prepare.outputs.unsigned_artifact_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_ID" =~ ^[a-f0-9]{32}$ ]] && [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/release.json"
+          python3 - <<'PY'
+          import os,json
+          from pathlib import Path
+          release=json.loads((Path(os.environ['RUNNER_TEMP'])/'release.json').read_text())
+          assert release.get('draft') is True and release['tag_name']=='native-convert-input-'+os.environ['BUILD_ID'], 'Refusing to remove a different release.'
+          PY
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          if [[ "$UNSIGNED_ID" =~ ^[0-9]+$ ]]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$UNSIGNED_ID"
+          fi

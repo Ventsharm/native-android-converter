@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#7657d5">
+<meta name="referrer" content="no-referrer">
+<title>Native Android Converter</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6f3fc;color:#272333;font:16px/1.55 system-ui,sans-serif}.wrap{max-width:720px;margin:auto;padding:22px 16px 44px}.hero{padding:26px 24px;border-radius:26px;background:linear-gradient(135deg,#6745d0,#a580ed);color:white;margin-bottom:18px}h1{font-size:28px;line-height:1.2;margin:0 0 10px}.hero p{margin:0}.card{background:white;border:1px solid #e5dff0;padding:22px;border-radius:22px;margin-bottom:16px;box-shadow:0 10px 28px #3524430a}h2{font-size:20px;margin:0 0 14px}.field{margin-bottom:18px}label{display:block;font-weight:750;margin-bottom:6px}input,select{font:inherit;width:100%;padding:12px;border:1px solid #d9d1e6;border-radius:12px;min-height:48px}input[type=checkbox]{width:20px;min-height:20px;margin:4px 10px 0 0;flex-shrink:0}.check{display:flex;align-items:flex-start;font-size:14px}.hint{font-size:13px;color:#716a80;margin:6px 0 0}.note{padding:14px;border:1px solid #dfd1f6;border-radius:14px;background:#f7f2ff;font-size:14px;margin:14px 0}button,.download{font:750 16px/1.4 system-ui,sans-serif;padding:14px 18px;border-radius:14px;border:0;cursor:pointer;min-height:48px}.primary,.download{display:block;width:100%;background:linear-gradient(135deg,#6745d0,#9873e6);color:white;text-align:center;text-decoration:none}.secondary{background:#f0e9fc;color:#603cbd;width:100%;margin-top:10px}button:disabled{opacity:.55;cursor:wait}a{color:#6440ba}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #b8a5ff;outline-offset:3px}.status{white-space:pre-wrap;overflow-wrap:anywhere;margin:16px 0 0;padding:14px;border-radius:14px;background:#f4f0fb}.status:empty{display:none}.status.error{background:#fff0f1;color:#972c3b}.status.success{background:#edf8ef;color:#21623a}.steps{font-size:14px;white-space:pre-wrap;margin-top:12px;color:#655b75}.links a{display:block;margin-top:12px}[hidden]{display:none!important}footer{font-size:13px;color:#7a7186;text-align:center}.row{display:flex;gap:10px;align-items:center}code{font-size:.95em}p{margin:8px 0 14px}
+</style>
+<script src="builder.js" defer></script>
+</head>
+<body><main class="wrap">
+<header class="hero"><h1>Native Android Converter</h1><p>Upload a ZIP containing an Android app bundle or native project. Download a signed APK and AAB using your existing private signing key.</p></header>
+<form id="buildForm">
+<section class="card"><h2>1. Connect your private builder</h2>
+<div class="field"><label for="token">Fine-grained GitHub token</label><input id="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" required placeholder="github_pat_…"><p class="hint">Use your existing token with access to your private builder repository. It needs Actions, Contents and Workflows: Read and write.</p></div>
+<button class="secondary" id="connect" type="button">Find my private repositories</button>
+<div class="field"><label for="repository">Private builder repository</label><select id="repository" disabled required><option value="">Connect to GitHub first</option></select></div>
+<div class="note">Your token stays in this tab and goes directly to GitHub. It is never saved in browser storage. Your JKS, alias and passwords stay in your private repository secrets.</div>
+<p class="hint">Choose the same private repository used by Bubblewrap Builder. It already has <code>KEYSTORE_BASE64</code>, <code>KEYSTORE_PASSWORD</code>, <code>KEY_ALIAS</code> and <code>KEY_PASSWORD</code>.</p>
+</section>
+<section class="card"><h2>2. Upload your Android ZIP</h2>
+<div class="field"><label for="source">Android project or app-bundle ZIP</label><input id="source" type="file" accept=".zip,application/zip" required><p class="hint">Up to 30 MB. Include one AAB, or a native project with its Gradle wrapper and app module. Leave out build folders, JKS files and signing passwords. An APK-only or website ZIP cannot produce a native AAB.</p></div>
+<div class="field"><label for="module">App module</label><input id="module" value="app" pattern="[A-Za-z][A-Za-z0-9_-]*" required><p class="hint">Only used for source projects; normally <strong>app</strong>. The app bundle or project controls the app name, package name, version, icon, Firebase setup and native reminders.</p></div>
+<label class="check"><input id="trusted" type="checkbox" required><span>This is my own app, or source code I trust to run in my private GitHub repository.</span></label>
+</section>
+<section class="card"><h2>3. Convert and sign</h2><p>GitHub prepares the app bundle, then signs it and generates a universal APK in a separate job using your existing key. No private signing details go into your uploaded ZIP.</p>
+<button class="primary" id="build" type="submit">Create my APK + AAB</button>
+<button class="secondary" id="forget" type="button">Forget token</button>
+<div id="status" class="status" role="status" aria-live="polite"></div>
+<div id="steps" class="steps"></div>
+<div class="links"><a id="runLink" target="_blank" rel="noopener noreferrer" hidden>Open this build on GitHub</a><button id="download" type="button" class="primary" hidden>Download signed APK + AAB ZIP</button><a id="cleanup" target="_blank" rel="noopener noreferrer" hidden>Remove the temporary private source upload</a></div>
+</section></form>
+<section class="card"><h2>Your signed files</h2><p>The download contains <strong>app-release.apk</strong>, <strong>app-release.aab</strong> and the public signing certificate fingerprint. GitHub keeps signed downloads for one day.</p><p class="hint">The temporary private source upload and unsigned build artifact are removed automatically after the run. If a run is cancelled or cannot start, use its private upload link to remove the leftover upload.</p><a href="https://ventsharm.github.io/bubblewrap-builder/">Website / Bubblewrap Builder</a></section>
+<footer>No Firebase credentials are needed by this builder. Your app’s Firebase connection and Android reminders belong in its source project.</footer>
+</main></body></html>
