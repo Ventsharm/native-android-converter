@@ -43,8 +43,8 @@ An existing unrelated workflow at the same new path is never overwritten.
 
 ## Privacy and hosting
 
-This source repository is private. The converter page itself is **public**, as
-requested, like Bubblewrap Builder. No page sign-in is required. Its frontend
+This source repository and the converter page are **public**, like Bubblewrap
+Builder. Open https://ventsharm.github.io/native-android-converter/. No page sign-in is required. Its frontend
 contains no secrets. GitHub builds, source uploads and signing secrets remain in
 the private build repository selected by the user. A public page does not grant
 other visitors access to your GitHub account or secrets.
@@ -86,7 +86,8 @@ billing or buy build minutes. Only upload your own apps or source you trust.
 ## Updating
 
 Edit `index.html`, `builder.js` or `workflow.yml` here, run checks, then publish the
-matching public Site version. The next conversion updates this converter's
+matching GitHub Pages version by pushing to `main`. Pages serves the repository
+root; `.nojekyll` keeps the frontend and workflow template available unchanged. The next conversion updates this converter's
 workflow in the chosen private build repo. Existing signing secrets are never
 changed. Keep the original Bubblewrap Builder separate.
 
