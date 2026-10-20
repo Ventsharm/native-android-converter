@@ -42,7 +42,7 @@
     return result;
   }
   async function ensureWorkflow(token, owner, repo, branch, source) {
-    if (!source.startsWith(MARKER)) throw new Error('The native conversioner workflow template could not be verified.');
+    if (!source.startsWith(MARKER)) throw new Error('The native converter workflow template could not be verified.');
     const path = repoPath(owner, repo) + '/contents/' + WORKFLOW_PATH;
     let old;
     try { old = await request(token, path + '?ref=' + encode(branch)); }
@@ -62,23 +62,33 @@
     }
     throw new Error('GitHub saved the workflow but has not registered it yet. Wait a moment and try again.');
   }
+  function encodeBytes(bytes) {
+    const chunks=[];
+    for(let i=0;i<bytes.length;i+=32768)chunks.push(String.fromCharCode(...bytes.subarray(i,i+32768)));
+    return btoa(chunks.join(''));
+  }
   async function uploadProject(token, owner, repo, branch, id, file) {
-    const release = await request(token, repoPath(owner, repo) + '/releases', { method: 'POST', body: JSON.stringify({
-      tag_name: 'native-convert-input-' + id, target_commitish: branch,
-      name: 'Native Android convert input ' + id, draft: true,
-      body: 'Temporary private source upload for Native Android Converter. Automatically deleted after the build.'
-    }) });
-    // Use a fixed GitHub upload endpoint, never a URL supplied by project contents.
-    const upload = await fetch(`https://uploads.github.com/repos/${encode(owner)}/${encode(repo)}/releases/${release.id}/assets?name=source.zip`, {
-      method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer',
-      headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/zip' }, body: file
-    });
-    if (!upload.ok) {
-      await request(token, repoPath(owner, repo) + '/releases/' + release.id, { method: 'DELETE' }).catch(() => {});
-      throw new Error('The private source upload failed. Check your connection and repository permissions.');
+    const path=repoPath(owner,repo);
+    const release=await request(token,path+'/releases',{method:'POST',body:JSON.stringify({
+      tag_name:'native-convert-input-'+id,target_commitish:branch,
+      name:'Native Android convert input '+id,draft:true,
+      body:'Temporary private Native Android Converter upload; preparation in progress.'
+    })});
+    try {
+      // uploads.github.com rejects browser preflight requests. Git blobs use the
+      // CORS-enabled API, without adding the ZIP to any branch or commit history.
+      const blob=await request(token,path+'/git/blobs',{method:'POST',body:JSON.stringify({
+        encoding:'base64',content:encodeBytes(new Uint8Array(await file.arrayBuffer()))
+      })});
+      if(!/^[a-f0-9]{40}$/.test(blob.sha))throw new Error('GitHub returned an invalid upload identifier.');
+      const manifest={converter:'native-android-input-v2',build_id:id,blob_sha:blob.sha,size:file.size};
+      await request(token,path+'/releases/'+release.id,{method:'PATCH',body:JSON.stringify({body:JSON.stringify(manifest)})});
+      return {release,asset:{id:blob.sha}};
+    } catch(error) {
+      await request(token,path+'/releases/'+release.id,{method:'DELETE'}).catch(()=>{});
+      if(error instanceof TypeError)throw new Error('The ZIP could not reach GitHub. Reload the converter and check your connection before trying again.');
+      throw error;
     }
-    return { release, asset: await upload.json() };
   }
   async function locateRun(token, owner, repo, branch, id) {
     for (let i = 0; i < 40; i++) {
@@ -95,7 +105,7 @@
     if (!artifact) throw new Error('The signed download is unavailable or has expired. Open the GitHub run to check its artifacts.');
     return artifact;
   }
-  const helpers = { validModule, validProject, request, ownedPrivateRepos, ensureWorkflow, uploadProject, locateRun, signedArtifact, MAX_ZIP };
+  const helpers = { validModule, validProject, request, ownedPrivateRepos, ensureWorkflow, uploadProject, locateRun, signedArtifact, encodeBytes, MAX_ZIP };
   if (typeof module !== 'undefined' && module.exports) module.exports = helpers;
   if (!root.document) return;
   const $ = id => document.getElementById(id);
@@ -179,7 +189,7 @@
       throw new Error('The build is still running. Follow the GitHub link to check it and download the signed artifact when ready.');
     } catch (error) {
       if (uploaded && !dispatched) await request(token, repoPath(account.login, name) + '/releases/' + uploaded.release.id, { method: 'DELETE' }).catch(() => {});
-      status(error.message, 'error');
+      status(error instanceof TypeError ? 'The browser could not reach GitHub. Reload the converter and try again. If a build link is shown, check it before starting another build.' : error.message, 'error');
     } finally {
       active = false; for (const id of ['build', 'connect', 'forget', 'token', 'repository', 'source', 'module', 'trusted']) $(id).disabled = false;
     }

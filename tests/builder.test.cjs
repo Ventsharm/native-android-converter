@@ -50,3 +50,13 @@ test('browser script parses and does not persist tokens or load third-party scri
   for(const match of html.matchAll(/<script\b[^>]*src="([^"]+)"/g))assert(!match[1].startsWith('http'));
   assert(html.includes('type="password"'));assert(html.includes('type="file"'));
 });
+test('browser upload uses only the CORS-enabled GitHub API and preserves binary ZIP bytes', async () => {
+  const bytes=Uint8Array.from([80,75,3,4,0,128,255,1]);const calls=[];const sha='a'.repeat(40);
+  global.fetch=async(url,options)=>{calls.push({url,options});assert(url.startsWith('https://api.github.com/'));const body=JSON.parse(options.body);if(url.endsWith('/git/blobs'))assert.deepEqual(Buffer.from(body.content,'base64'),Buffer.from(bytes));return{ok:true,status:200,json:async()=>url.endsWith('/git/blobs')?{sha}:{id:12,html_url:'https://github.com/owner/private/releases/12'}};};
+  const uploaded=await helpers.uploadProject('token','owner','private','main','b'.repeat(32),{size:bytes.length,arrayBuffer:async()=>bytes.buffer});
+  assert.equal(uploaded.asset.id,sha);const manifest=JSON.parse(JSON.parse(calls[2].options.body).body);assert.equal(manifest.blob_sha,sha);assert.equal(manifest.size,bytes.length);assert.equal(manifest.converter,'native-android-input-v2');
+});
+test('failed browser upload cleans its draft and reports a useful connection error', async()=>{
+ const methods=[];global.fetch=async(url,options)=>{methods.push(options.method);if(url.endsWith('/git/blobs'))throw new TypeError('Failed to fetch');return{ok:true,status:options.method==='DELETE'?204:200,json:async()=>({id:12})};};
+ await assert.rejects(()=>helpers.uploadProject('token','owner','private','main','b'.repeat(32),{size:24,arrayBuffer:async()=>new ArrayBuffer(24)}),/ZIP could not reach GitHub/);assert.deepEqual(methods,['POST','POST','DELETE']);
+});

@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       asset_id:
-        description: Temporary private ZIP asset
+        description: Private ZIP blob identifier
         required: true
         type: string
       app_module:
@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$BUILD_ID" =~ ^[a-f0-9]{32}$ ]] && [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] && [[ "$ASSET_ID" =~ ^[0-9]+$ ]]
+          [[ "$BUILD_ID" =~ ^[a-f0-9]{32}$ ]] && [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] && [[ "$ASSET_ID" =~ ^[a-f0-9]{40}$ ]]
           [[ "$APP_MODULE" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/release.json"
           python3 - <<'PY'
@@ -53,10 +53,25 @@ jobs:
           r=json.loads((Path(os.environ['RUNNER_TEMP'])/'release.json').read_text())
           assert r.get('draft') is True, 'Only temporary private draft uploads are accepted.'
           assert r['tag_name']=='native-convert-input-'+os.environ['BUILD_ID'], 'Upload does not belong to this request.'
-          a=next((a for a in r.get('assets',[]) if str(a['id'])==os.environ['ASSET_ID']),None)
-          assert a and a['name']=='source.zip' and 22<=a['size']<=30*1024*1024, 'Invalid source ZIP.'
+          manifest=json.loads(r['body'])
+          assert manifest.get('converter')=='native-android-input-v2' and manifest.get('build_id')==os.environ['BUILD_ID'], 'Invalid upload manifest.'
+          assert manifest.get('blob_sha')==os.environ['ASSET_ID'] and 22<=manifest.get('size',0)<=30*1024*1024, 'Invalid source ZIP.'
           PY
-          gh api -H 'Accept: application/octet-stream' "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" > "$RUNNER_TEMP/source.zip"
+          gh api "repos/$GITHUB_REPOSITORY/git/blobs/$ASSET_ID" > "$RUNNER_TEMP/source-blob.json"
+          python3 - <<'PY'
+          import base64,json,os,hashlib
+          from pathlib import Path
+          temp=Path(os.environ['RUNNER_TEMP'])
+          manifest=json.loads(json.loads((temp/'release.json').read_text())['body'])
+          blob=json.loads((temp/'source-blob.json').read_text())
+          assert blob.get('encoding')=='base64' and blob.get('sha')==os.environ['ASSET_ID'], 'Invalid GitHub ZIP object.'
+          assert blob.get('size')==manifest['size'], 'ZIP size mismatch.'
+          data=base64.b64decode(''.join(blob['content'].split()),validate=True)
+          assert len(data)==manifest['size'], 'Truncated ZIP upload.'
+          assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==os.environ['ASSET_ID'], 'ZIP object checksum mismatch.'
+          (temp/'source.zip').write_bytes(data)
+          (temp/'source-blob.json').unlink()
+          PY
       - name: Inspect and safely unpack app ZIP
         id: input
         shell: bash

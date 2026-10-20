@@ -57,8 +57,10 @@ public code and the names of your repository secrets.
 
 ## Build isolation and cleanup
 
-1. Source goes to a temporary **draft release in your selected private repo**.
-   It is not committed to repository history.
+1. The browser uploads the ZIP through GitHub’s browser-compatible Git blob API
+   in your selected private repository. A temporary draft release holds its
+   request manifest. The ZIP is not added to a branch or commit history. GitHub
+   may retain the private unreferenced object under its internal storage policies.
 2. A preparation job verifies the upload belongs to the current random request ID,
    checks ZIP paths, rejects links/secret files/oversized inputs, and builds source
    projects **without the signing secrets**.
@@ -69,7 +71,7 @@ public code and the names of your repository secrets.
 4. Both signed outputs are checked against the keystore's public certificate.
    The signed artifact contains only `app-release.apk`, `app-release.aab`, and a
    public certificate fingerprint. GitHub retains it for **one day**.
-5. A separate cleanup job removes this request's draft upload and unsigned
+5. A separate cleanup job removes this request's draft manifest and unsigned
    artifact, including after ordinary build/sign failures. Cancelled runs, token
    failures or workflows that never start may leave an upload; the page provides
    its private GitHub link for manual deletion.
